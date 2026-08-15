@@ -43,9 +43,10 @@ class GeneratorModel(nn.Module):
                 out_channels=128,
                 kernel_size=5,
                 stride=5,
-                padding=0 
-            nn.GroupNorm(1, 128),
-            nn.ReLU()
+                padding=0
+                nn.GroupNorm(1, 128),
+                nn.ReLU()
+            )
         )
 
         self.conv_block_2 = nn.Sequential(
