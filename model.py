@@ -44,9 +44,9 @@ class GeneratorModel(nn.Module):
                 kernel_size=5,
                 stride=5,
                 padding=0
-                nn.GroupNorm(1, 128),
-                nn.ReLU()
-            )
+            ),
+            nn.GroupNorm(1, 128),
+            nn.ReLU()
         )
 
         self.conv_block_2 = nn.Sequential(
@@ -177,8 +177,22 @@ dataset = TensorDataset(dummy_real_data)
 dataloader = DataLoader(dataset, batch_size=batch_size,
                         shuffle=True, drop_last=True)
 
+# Validation Data
+dummy_val_data = torch.randn(100, channels, sequence_length)
+val_dataset = TensorDataset(dummy_val_data)
+val_dataloader = DataLoader(
+    val_dataset, batch_size=batch_size, shuffle=False, drop_last=True)
+
+# Test Data
+dummy_test_data = torch.randn(100, channels, sequence_length)
+test_dataset = TensorDataset(dummy_test_data)
+test_dataloader = DataLoader(
+    test_dataset, batch_size=batch_size, shuffle=False, drop_last=True)
 
 for epoch in range(epochs):
+    # Set models to training mode
+    generator.train()
+    discriminator.train()
     for i, (real_waveforms,) in enumerate(dataloader):
 
         real_waveforms = real_waveforms.to(device)
@@ -217,7 +231,50 @@ for epoch in range(epochs):
         # Backpropagate
         loss_G.backward()
         optimizer_G.step()
+
+   # Validation loop
+    generator.eval()
+    discriminator.eval()
+    val_loss_D = 0.0
+
+    with torch.no_grad():
+        for val_real, in val_dataloader:
+            val_real = val_real.to(device)
+            val_batch_size = val_real.size(0)
+
+            val_real_labels = torch.ones((val_batch_size, 1), device=device)
+            val_preds = discriminator(val_real)
+            val_loss = criterion(val_preds, val_real_labels)
+            val_loss_D += val_loss.item()
+
+    avg_val_loss = val_loss_D / len(val_dataloader)
+
     # Metrics and logging
     if epoch % 10 == 0:
         print(
-            f"Epoch:{epoch} | Discriminator Loss: {loss_D.item():.4f} | Generator Loss: {loss_G.item():.4f} ")
+            f"Epoch:{epoch} | Discriminator Loss: {loss_D.item():.4f} | Generator Loss: {loss_G.item():.4f} | Validation Discriminator Loss: {avg_val_loss:.4f}")
+
+# Testing
+generator.eval()
+discriminator.eval()
+
+test_loss_D = 0.0
+
+with torch.no_grad():
+    for test_real, in test_dataloader:
+        test_real = test_real.to(device)
+        test_batch_size = test_real.size(0)
+
+        test_real_labels = torch.ones((test_batch_size, 1), device=device)
+        test_preds = discriminator(test_real)
+        test_loss = criterion(test_preds, test_real_labels)
+        test_loss_D += test_loss.item()
+
+    avg_test_loss = test_loss_D / len(test_dataloader)
+
+    # Generate final synthetic waveforms using the fully trained Generator
+    final_noise = torch.randn(batch_size, latent_dim, device=device)
+    final_synthetic_waveforms = generator(final_noise)
+
+print(f"Final Test Discriminator Loss: {avg_test_loss:.4f}")
+print(f"Generated {final_synthetic_waveforms.size(0)} ")
