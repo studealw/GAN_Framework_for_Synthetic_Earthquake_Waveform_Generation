@@ -12,14 +12,15 @@ noise_input = torch.randn(32, 100)
 
 
 @dataclass
-class GeneratorModelConfig:
+class DecoderGeneratorModelConfig:
     batch_size: int = 32
-    sequence_length: int = 200
+    sequence_length: int = 100
     channels: int = 3
     kernel_size_1: int = 5
     stride_1: int = 5
-    latent_dim: int = 100
+    latent_dim: int = 32
     padding: int = 0
+    cond_dim: int = 7
 
 
 @dataclass
@@ -27,13 +28,15 @@ class DiscriminatorConfig:
     batch_size: int = 32
 
 
-class GeneratorModel(nn.Module):
-    def __init__(self, config: GeneratorModelConfig):
+class DecoderGeneratorModel(nn.Module):
+    def __init__(self, config: DecoderGeneratorModelConfig):
         super().__init__()
         self.config = config
 
+        in_features = self.config.latent_dim + self.config.cond_dim
+
         self.initial_dense = nn.Sequential(
-            nn.Linear(self.config.latent_dim, 256 * 5),
+            nn.Linear(in_features, 256 * 5),
             nn.ReLU()
         )
 
@@ -72,8 +75,9 @@ class GeneratorModel(nn.Module):
             nn.ReLU()
         )
 
-    def forward(self, x):
-        x = self.initial_dense(x)
+    def forward(self, z , c):
+        z_cond = torch.cat((z, c), dim=1)
+        x = self.initial_dense(z_cond)
         x = x.view(-1, 256, 5)
         x = self.conv_block_1(x)
         x = self.conv_block_2(x)
@@ -82,7 +86,7 @@ class GeneratorModel(nn.Module):
         return x
 
 
-model_0 = GeneratorModel(GeneratorModelConfig())
+# model_0 = GeneratorModel(GeneratorModelConfig())
 
 # print(model_0(test_data).shape)
 
@@ -182,7 +186,7 @@ class EncoderModel(nn.Module):
                 padding=0
             ),
             nn.GroupNorm(1, 256),
-            nn.LeakyReLU(0.2)
+            nn.LeakyReLU(0.2),
 
             nn.Flatten()
         )
@@ -202,20 +206,29 @@ class EncoderModel(nn.Module):
 
         return mu, logvar
 
+def reparameterize(mu, logvar):
+
+    std = torch.exp(0.5 * logvar)
+    eps = torch.randn_like(std)
+
+    z = mu + eps * std
+
+    return z
+
 
 
 model_1 = DiscriminatorModel(DiscriminatorConfig())
 
-fake_waveforms = model_0(noise_input)
+# fake_waveforms = model_0(noise_input)
 
-predictions = model_1(fake_waveforms)
-
-
-print(predictions.shape)  # Output shape should be (batch_size, 1)
+# predictions = model_1(fake_waveforms)
 
 
-generator = model_0.to(device)
-discriminator = model_1.to(device)
+# print(predictions.shape)  # Output shape should be (batch_size, 1)
+
+
+# generator = model_0.to(device)
+# discriminator = model_1.to(device)
 
 epochs = 10
 learning_rate = 3e-4
