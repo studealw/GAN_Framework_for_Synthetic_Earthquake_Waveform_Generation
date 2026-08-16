@@ -143,6 +143,67 @@ class DiscriminatorModel(nn.Module):
         return x
 
 
+class EncoderModel(nn.Module):
+    def __init__(self, sequence_length: int = 100, channels: int = 3, latent_dim: int = 32, cond_dim: int = 7):
+        super().__init__()
+
+        self.seq_length = sequence_length
+        self.channels = channels
+        self.latent_dim = latent_dim
+        self.cond_dim = cond_dim
+
+        in_channels = self.channels + self.cond_dim
+
+        self.conv_block = nn.Sequential(
+            nn.Conv1d(
+                in_channels=in_channels,
+                out_channels=64,
+                kernel_size=4,
+                stride=2,
+                padding=1
+            ),
+            nn.LeakyReLU(0.2),
+
+            nn.Conv1d(
+                in_channels=64,
+                out_channels=128,
+                kernel_size=4,
+                stride=2,
+                padding=1
+            ),
+            nn.GroupNorm(1, 128),
+            nn.LeakyReLU(0.2),
+
+            nn.Conv1d(
+                in_channels=128,
+                out_channels=256,
+                kernel_size=5,
+                stride=5,
+                padding=0
+            ),
+            nn.GroupNorm(1, 256),
+            nn.LeakyReLU(0.2)
+
+            nn.Flatten()
+        )
+
+        self.fc_mu = nn.Linear(256 * 5, self.latent_dim)
+        self.fc_logvar = nn.Linear(256 * 5, self.latent_dim)
+
+    def forward(self, x, cond):
+
+        cond_expanded = cond.unsqueeze(-1).expand(-1, -1, self.seq_length)
+        x_cond = torch.cat((x, cond_expanded), dim=1)
+
+        x_encoded = self.conv_block(x_cond)
+
+        mu = self.fc_mu(x_encoded)
+        logvar = self.fc_logvar(x_encoded)
+
+        return mu, logvar
+
+
+
 model_1 = DiscriminatorModel(DiscriminatorConfig())
 
 fake_waveforms = model_0(noise_input)
@@ -237,7 +298,7 @@ for epoch in range(epochs):
     discriminator.eval()
     val_loss_D = 0.0
 
-    with torch.no_grad():
+    with torch.inference_mode():
         for val_real, in val_dataloader:
             val_real = val_real.to(device)
             val_batch_size = val_real.size(0)
@@ -260,7 +321,7 @@ discriminator.eval()
 
 test_loss_D = 0.0
 
-with torch.no_grad():
+with torch.inference_mode():
     for test_real, in test_dataloader:
         test_real = test_real.to(device)
         test_batch_size = test_real.size(0)
