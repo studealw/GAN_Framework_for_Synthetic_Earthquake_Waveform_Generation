@@ -85,6 +85,7 @@ class CriticModel(nn.Module):
         super().__init__()
 
         self.config = config
+        self.sequence_length = sequence_length
 
         in_channels = channels + cond_dim
         
