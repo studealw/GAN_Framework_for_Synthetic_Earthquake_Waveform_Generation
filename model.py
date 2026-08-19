@@ -6,11 +6,6 @@ from torch.utils.data import DataLoader, TensorDataset
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-
-# Example input data with shape (batch_size, sequence_length, channels)
-noise_input = torch.randn(32, 100)
-
-
 @dataclass
 class DecoderGeneratorModelConfig:
     batch_size: int = 32
@@ -24,7 +19,7 @@ class DecoderGeneratorModelConfig:
 
 
 @dataclass
-class DiscriminatorConfig:
+class CriticConfig:
     batch_size: int = 32
 
 
@@ -85,21 +80,17 @@ class DecoderGeneratorModel(nn.Module):
 
         return x
 
-
-# model_0 = GeneratorModel(GeneratorModelConfig())
-
-# print(model_0(test_data).shape)
-
-
-class DiscriminatorModel(nn.Module):
-    def __init__(self, config: DiscriminatorConfig):
+class CriticModel(nn.Module):
+    def __init__(self, config: CriticConfig,channels: int = 3, sequence_length: int = 100, cond_dim = 7):
         super().__init__()
 
         self.config = config
 
+        in_channels = channels + cond_dim
+        
         self.conv_block_1 = nn.Sequential(
             nn.Conv1d(
-                in_channels=3,
+                in_channels=in_channels,
                 out_channels=64,
                 kernel_size=4,
                 stride=2,
@@ -134,14 +125,19 @@ class DiscriminatorModel(nn.Module):
 
         self.classifier = nn.Sequential(
             nn.Flatten(),
-            nn.Linear(256 * 5, 1),
-            nn.Sigmoid()
+            nn.Linear(256 * 5, 1)
         )
 
-    def forward(self, x):
-        x = self.conv_block_1(x)
+    def forward(self, x ,c):
+
+        c_expanded = c.unsqueeze(-1).expand(-1, -1, self.sequence_length)
+
+        x_cond = torch.cat((x, c_expanded), dim=1)
+
+        x = self.conv_block_1(x_cond)
         x = self.conv_block_2(x)
         x = self.conv_block_3(x)
+
         x = self.classifier(x)
 
         return x
@@ -217,18 +213,13 @@ def reparameterize(mu, logvar):
 
 
 
-model_1 = DiscriminatorModel(DiscriminatorConfig())
-
-# fake_waveforms = model_0(noise_input)
-
-# predictions = model_1(fake_waveforms)
+model_1 = CriticModel(CriticConfig())
 
 
-# print(predictions.shape)  # Output shape should be (batch_size, 1)
 
 
-# generator = model_0.to(device)
-# discriminator = model_1.to(device)
+
+
 
 epochs = 10
 learning_rate = 3e-4
