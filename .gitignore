@@ -1,2 +1,24 @@
-.vscode
-.venv
+# Environments & Python Cache
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.ipynb_checkpoints/
+
+
+# Datasets (Too large for Git)
+*.csv
+waveform/
+test_data.csv
+waveform.csv
+
+# Model Weights
+*.pth
+*.pt
+encoder_weights.pth
+decoder_weights.pth
+critic_weights.pth
+
+# OS & IDE Files
+.DS_Store
+.vscode/
