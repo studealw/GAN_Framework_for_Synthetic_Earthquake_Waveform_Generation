@@ -33,7 +33,7 @@ class DecoderGeneratorModel(nn.Module):
 
         self.initial_dense = nn.Sequential(
             nn.Linear(in_features, 256 * 5),
-            nn.ReLU()
+            nn.LeakyReLU(0.2)
         )
 
         self.conv_block_1 = nn.Sequential(
@@ -45,7 +45,7 @@ class DecoderGeneratorModel(nn.Module):
                 padding=0
             ),
             nn.GroupNorm(1, 128),
-            nn.ReLU()
+            nn.LeakyReLU(0.2)
         )
 
         self.conv_block_2 = nn.Sequential(
@@ -68,7 +68,7 @@ class DecoderGeneratorModel(nn.Module):
                 stride=2,
                 padding=1
             ),
-            nn.ReLU()
+            # nn.LeakyReLU(0.2)
         )
 
     def forward(self, z, c):

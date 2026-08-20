@@ -217,7 +217,7 @@ for epoch in range(epochs):
         # Calculate the 3 Generator Losses
         loss_adv = -torch.mean(critic_fake_G)
         loss_recon = criterion_recon(fake_waveforms, real_waveforms)
-        loss_kl = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
+        loss_kl = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1).mean()
 
         loss_G_total = loss_adv + \
             (lambda_recon * loss_recon) + (lambda_kl * loss_kl)
