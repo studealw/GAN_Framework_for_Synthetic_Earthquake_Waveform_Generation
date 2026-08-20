@@ -41,12 +41,22 @@ def apply_butterworth(data, cutoff_freq, sample_rate, order=4):
 
 
 class EarthquakeDataset(Dataset):
-    def __init__(self, metadata_csv="waveform.csv", waveform_folder="./waveform", sequence_length=100):
+    def __init__(self, metadata_csv="waveform/waveform.csv", waveform_folder="./waveform", sequence_length=100):
         self.df = pd.read_csv(metadata_csv)
         self.seq_length = sequence_length
-        self.waveform_folder = waveform_folder  # Where your NS/EW/UP files are saved
+        self.waveform_folder = waveform_folder
 
-        # 1. Extract 7 Real Conditional Parameters from the CSV
+        # 1. Map all files in all subfolders dynamically
+        print("Scanning subfolders for waveform files...")
+        self.file_map = {}
+        for root, dirs, files in os.walk(self.waveform_folder):
+            for file in files:
+                # Ignore the metadata file if it is in the same folder!
+                if file.endswith('.csv') and file != 'waveform.csv':
+                    self.file_map[file] = os.path.join(root, file)
+        print(f"Found {len(self.file_map)} waveform files.")
+
+        # 2. Extract 7 Real Conditional Parameters from the CSV
         cond_cols = [
             'Magnitude', 'EQ_Depth(km)', 'Epicentral_Distance_km',
             'Station Height(m)', 'Station_Lat', 'Station_Lon', 'PGA_UD(gal)'
@@ -64,30 +74,25 @@ class EarthquakeDataset(Dataset):
     def __getitem__(self, idx):
         row = self.df.iloc[idx]
 
-        # 2. Extract filenames from the absolute paths in the CSV
-        # We use os.path.basename just in case your F:\ drive path changed
+        # 3. Extract filenames from the absolute paths in the CSV (UNCOMMENTED)
         ns_name = os.path.basename(row['NS_Waveform_File'])
         ew_name = os.path.basename(row['EW_Waveform_File'])
         up_name = os.path.basename(row['UP_Waveform_File'])
 
-        ns_path = os.path.join(self.waveform_folder, ns_name)
-        ew_path = os.path.join(self.waveform_folder, ew_name)
-        up_path = os.path.join(self.waveform_folder, up_name)
+        # 4. Look up the actual paths using our map
+        ns_path = self.file_map.get(ns_name)
+        ew_path = self.file_map.get(ew_name)
+        up_path = self.file_map.get(up_name)
 
-        # 3. Read the external Waveform CSVs
-        try:
-            # Assuming these files have an 'Acceleration' column or are single-column
-            ns_data = pd.read_csv(ns_path).iloc[:, 0].values
-            ew_data = pd.read_csv(ew_path).iloc[:, 0].values
-            up_data = pd.read_csv(up_path).iloc[:, 0].values
-        except FileNotFoundError:
-            # Fallback if a file is missing so training doesn't crash
-            ns_data, ew_data, up_data = [
-                torch.randn(self.seq_length).numpy()] * 3
-
-        # 4. Filter and Normalize all 3 channels
+        # 5. Read the external Waveform CSVs
         channels_data = []
-        for raw_data in [ns_data, ew_data, up_data]:
+        for path in [ns_path, ew_path, up_path]:
+            if path and os.path.exists(path):
+                raw_data = pd.read_csv(path).iloc[:, 0].values
+            else:
+                # Fallback if a file is missing so training doesn't crash
+                raw_data = torch.zeros(self.seq_length).numpy()
+
             # Take the required sequence length
             data_window = raw_data[:self.seq_length]
 
@@ -106,8 +111,12 @@ class EarthquakeDataset(Dataset):
         return waveforms, conditions
 
 
+# DATA LOADERS
 dataset = EarthquakeDataset(
-    "Train Tab MAG Data 3 SEC.csv", waveform_folder="./waveforms")
+    metadata_csv="waveform/waveform.csv",
+    waveform_folder="./waveform",
+    sequence_length=100
+)
 
 dataloader = DataLoader(dataset, batch_size=batch_size,
                         shuffle=True, drop_last=True)
@@ -115,8 +124,6 @@ val_dataloader = DataLoader(
     dataset, batch_size=batch_size, shuffle=False, drop_last=True)
 test_dataloader = DataLoader(
     dataset, batch_size=batch_size, shuffle=False, drop_last=True)
-
-
 # Calling the Models
 encoder = EncoderModel(sequence_length=sequence_length, channels=channels,
                        latent_dim=latent_dim, cond_dim=cond_dim).to(device)
