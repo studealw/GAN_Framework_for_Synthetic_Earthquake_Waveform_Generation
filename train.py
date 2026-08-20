@@ -11,7 +11,6 @@ from model import (
 )
 import pandas as pd
 from torch.utils.data import Dataset
-from scipy.signal import butter, filtfilt
 
 # Device configuration
 device = torch.device(
@@ -26,18 +25,12 @@ channels = 3
 sequence_length = 100
 latent_dim = 32
 cond_dim = 7
+n_critic = 5  # Number of critic updates per generator update
 
 # Loss Weights
 lambda_gp = 10.0      # Gradient Penalty weight
 lambda_recon = 10.0   # Reconstruction loss weight
 lambda_kl = 0.5       # KL divergence weight
-
-
-def apply_butterworth(data, cutoff_freq, sample_rate, order=4):
-    nyquist = 0.5 * sample_rate
-    normal_cutoff = cutoff_freq / nyquist
-    b, a = butter(order, normal_cutoff, btype='low', analog=False)
-    return filtfilt(b, a, data)
 
 
 class EarthquakeDataset(Dataset):
@@ -52,8 +45,12 @@ class EarthquakeDataset(Dataset):
         for root, dirs, files in os.walk(self.waveform_folder):
             for file in files:
                 # Ignore the metadata file if it is in the same folder!
-                if file.endswith('.csv') and file != 'waveform.csv':
+                if file.lower().endswith('.csv') and file.lower() != 'waveform.csv':
                     self.file_map[file] = os.path.join(root, file)
+
+                else:
+                    print("Dataset Not Found")
+                    return 0
         print(f"Found {len(self.file_map)} waveform files.")
 
         # 2. Extract 7 Real Conditional Parameters from the CSV
@@ -74,37 +71,29 @@ class EarthquakeDataset(Dataset):
     def __getitem__(self, idx):
         row = self.df.iloc[idx]
 
-        # 3. Extract filenames from the absolute paths in the CSV (UNCOMMENTED)
         ns_name = os.path.basename(row['NS_Waveform_File'])
         ew_name = os.path.basename(row['EW_Waveform_File'])
         up_name = os.path.basename(row['UP_Waveform_File'])
 
-        # 4. Look up the actual paths using our map
         ns_path = self.file_map.get(ns_name)
         ew_path = self.file_map.get(ew_name)
         up_path = self.file_map.get(up_name)
 
-        # 5. Read the external Waveform CSVs
         channels_data = []
         for path in [ns_path, ew_path, up_path]:
             if path and os.path.exists(path):
                 raw_data = pd.read_csv(path).iloc[:, 0].values
+                data_window = raw_data[:self.seq_length]
+
+                # Normalize directly without filtering
+                data_window = (data_window - data_window.mean()
+                               ) / (data_window.std() + 1e-8)
+                channels_data.append(data_window)
             else:
-                # Fallback if a file is missing so training doesn't crash
-                raw_data = torch.zeros(self.seq_length).numpy()
+                # Removed dummy data call; strict failure on missing data
+                raise FileNotFoundError(
+                    f"Missing waveform file for index {idx}: {path}")
 
-            # Take the required sequence length
-            data_window = raw_data[:self.seq_length]
-
-            # Normalize the waveform
-            data_window = (data_window - data_window.mean()) / \
-                (data_window.std() + 1e-8)
-
-            # Apply your custom Butterworth filter
-            data_filtered = apply_butterworth(data_window, 20, 100)
-            channels_data.append(data_filtered)
-
-        # Stack into (Channels=3, Sequence_Length=100)
         waveforms = torch.tensor(channels_data, dtype=torch.float32)
         conditions = torch.tensor(self.conditions[idx], dtype=torch.float32)
 
@@ -117,13 +106,15 @@ dataset = EarthquakeDataset(
     waveform_folder="./waveform",
     sequence_length=100
 )
-
-dataloader = DataLoader(dataset, batch_size=batch_size,
+train_set, val_set, test_set = torch.utils.data.random_split(dataset, [
+                                                             0.7, 0.15, 0.15])
+dataloader = DataLoader(train_set, batch_size=batch_size,
                         shuffle=True, drop_last=True)
 val_dataloader = DataLoader(
-    dataset, batch_size=batch_size, shuffle=False, drop_last=True)
+    val_set, batch_size=batch_size, shuffle=False, drop_last=True)
 test_dataloader = DataLoader(
-    dataset, batch_size=batch_size, shuffle=False, drop_last=True)
+    test_set, batch_size=batch_size, shuffle=False, drop_last=True)
+
 # Calling the Models
 encoder = EncoderModel(sequence_length=sequence_length, channels=channels,
                        latent_dim=latent_dim, cond_dim=cond_dim).to(device)
@@ -183,7 +174,6 @@ for epoch in range(epochs):
     for i, (real_waveforms, conditions) in enumerate(dataloader):
         real_waveforms = real_waveforms.to(device)
         conditions = conditions.to(device)
-
         # Train Critic
         optimizer_C.zero_grad()
 
@@ -204,27 +194,29 @@ for epoch in range(epochs):
         loss_C.backward()
         optimizer_C.step()
 
-        # Train Encoder & Decoder (Generator)
-        optimizer_E.zero_grad()
-        optimizer_G.zero_grad()
+        if i % n_critic == 0:
 
-        mu, logvar = encoder(real_waveforms, conditions)
-        z = reparameterize(mu, logvar)
-        fake_waveforms = decoder(z, conditions)
+            # Train Encoder & Decoder (Generator)
+            optimizer_E.zero_grad()
+            optimizer_G.zero_grad()
 
-        critic_fake_G = critic(fake_waveforms, conditions)
+            mu, logvar = encoder(real_waveforms, conditions)
+            z = reparameterize(mu, logvar)
+            fake_waveforms = decoder(z, conditions)
 
-        # Calculate the 3 Generator Losses
-        loss_adv = -torch.mean(critic_fake_G)
-        loss_recon = criterion_recon(fake_waveforms, real_waveforms)
-        loss_kl = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1).mean()
+            critic_fake_G = critic(fake_waveforms, conditions)
 
-        loss_G_total = loss_adv + \
-            (lambda_recon * loss_recon) + (lambda_kl * loss_kl)
+            # Calculate the 3 Generator Losses
+            loss_adv = -torch.mean(critic_fake_G)
+            loss_recon = criterion_recon(fake_waveforms, real_waveforms)
+            loss_kl = -0.5 * torch.mean(1 + logvar - mu.pow(2) - logvar.exp())
 
-        loss_G_total.backward()
-        optimizer_E.step()
-        optimizer_G.step()
+            loss_G_total = loss_adv + \
+                (lambda_recon * loss_recon) + (lambda_kl * loss_kl)
+
+            loss_G_total.backward()
+            optimizer_E.step()
+            optimizer_G.step()
 
     # Step the learning rate down after every epoch completes
     scheduler_E.step()
@@ -271,13 +263,6 @@ with torch.inference_mode():
 
 avg_test_recon = test_recon_error / len(test_dataloader)
 print(f"Final Test Reconstruction Error (L1): {avg_test_recon:.4f}")
-
-# Generate final pure synthetic waveforms from random noise
-final_z = torch.randn(batch_size, latent_dim, device=device)
-final_c = torch.randn(batch_size, cond_dim, device=device)
-final_synthetic_waveforms = decoder(final_z, final_c)
-print(
-    f"Generated {final_synthetic_waveforms.size(0)} synthetic waveforms based on conditions.")
 
 # SAVING THE MODELS
 
