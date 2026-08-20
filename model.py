@@ -6,6 +6,7 @@ from torch.utils.data import DataLoader, TensorDataset
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+
 @dataclass
 class DecoderGeneratorModelConfig:
     batch_size: int = 32
@@ -70,7 +71,7 @@ class DecoderGeneratorModel(nn.Module):
             nn.ReLU()
         )
 
-    def forward(self, z , c):
+    def forward(self, z, c):
         z_cond = torch.cat((z, c), dim=1)
         x = self.initial_dense(z_cond)
         x = x.view(-1, 256, 5)
@@ -80,15 +81,16 @@ class DecoderGeneratorModel(nn.Module):
 
         return x
 
+
 class CriticModel(nn.Module):
-    def __init__(self, config: CriticConfig,channels: int = 3, sequence_length: int = 100, cond_dim = 7):
+    def __init__(self, config: CriticConfig, channels: int = 3, sequence_length: int = 100, cond_dim=7):
         super().__init__()
 
         self.config = config
         self.sequence_length = sequence_length
 
         in_channels = channels + cond_dim
-        
+
         self.conv_block_1 = nn.Sequential(
             nn.Conv1d(
                 in_channels=in_channels,
@@ -129,7 +131,7 @@ class CriticModel(nn.Module):
             nn.Linear(256 * 5, 1)
         )
 
-    def forward(self, x ,c):
+    def forward(self, x, c):
 
         c_expanded = c.unsqueeze(-1).expand(-1, -1, self.sequence_length)
 
@@ -203,6 +205,7 @@ class EncoderModel(nn.Module):
 
         return mu, logvar
 
+
 def reparameterize(mu, logvar):
 
     std = torch.exp(0.5 * logvar)
@@ -213,134 +216,4 @@ def reparameterize(mu, logvar):
     return z
 
 
-
 model_1 = CriticModel(CriticConfig())
-
-
-
-
-
-
-
-epochs = 10
-learning_rate = 3e-4
-beta1 = 0.5
-batch_size = 32
-latent_dim = 100
-sequence_length = 100
-channels = 3
-
-criterion = nn.BCELoss()
-
-optimizer_G = optim.AdamW(generator.parameters(),
-                          lr=learning_rate, betas=(beta1, 0.999))
-optimizer_D = optim.AdamW(discriminator.parameters(),
-                          lr=learning_rate, betas=(beta1, 0.999))
-
-
-dummy_real_data = torch.randn(500, channels, sequence_length)
-dataset = TensorDataset(dummy_real_data)
-dataloader = DataLoader(dataset, batch_size=batch_size,
-                        shuffle=True, drop_last=True)
-
-# Validation Data
-dummy_val_data = torch.randn(100, channels, sequence_length)
-val_dataset = TensorDataset(dummy_val_data)
-val_dataloader = DataLoader(
-    val_dataset, batch_size=batch_size, shuffle=False, drop_last=True)
-
-# Test Data
-dummy_test_data = torch.randn(100, channels, sequence_length)
-test_dataset = TensorDataset(dummy_test_data)
-test_dataloader = DataLoader(
-    test_dataset, batch_size=batch_size, shuffle=False, drop_last=True)
-
-for epoch in range(epochs):
-    # Set models to training mode
-    generator.train()
-    discriminator.train()
-    for i, (real_waveforms,) in enumerate(dataloader):
-
-        real_waveforms = real_waveforms.to(device)
-        current_batch_size = real_waveforms.size(0)
-
-        real_labels = torch.ones((current_batch_size, 1), device=device)
-        fake_labels = torch.zeros((current_batch_size, 1), device=device)
-
-        # Training the discriminator
-        optimizer_D.zero_grad()
-
-        # Loss on real data
-        predictions_real = discriminator(real_waveforms)
-        loss_D_real = criterion(predictions_real, real_labels)
-
-        # Loss on fake data
-        noise = torch.randn(current_batch_size, latent_dim, device=device)
-        generated_waveforms = generator(noise)
-
-        # Detach the generated waveforms for the discriminator step
-        predictions_fake = discriminator(generated_waveforms.detach())
-        loss_D_fake = criterion(predictions_fake, fake_labels)
-
-        # Combine and backpropagate
-        loss_D = (loss_D_real + loss_D_fake) / 2
-        loss_D.backward()
-        optimizer_D.step()
-
-       # Training the generator
-        optimizer_G.zero_grad()
-
-        # Loss on generated data
-        predictions_for_G = discriminator(generated_waveforms)
-        loss_G = criterion(predictions_for_G, real_labels)
-
-        # Backpropagate
-        loss_G.backward()
-        optimizer_G.step()
-
-   # Validation loop
-    generator.eval()
-    discriminator.eval()
-    val_loss_D = 0.0
-
-    with torch.inference_mode():
-        for val_real, in val_dataloader:
-            val_real = val_real.to(device)
-            val_batch_size = val_real.size(0)
-
-            val_real_labels = torch.ones((val_batch_size, 1), device=device)
-            val_preds = discriminator(val_real)
-            val_loss = criterion(val_preds, val_real_labels)
-            val_loss_D += val_loss.item()
-
-    avg_val_loss = val_loss_D / len(val_dataloader)
-
-    # Metrics and logging
-    if epoch % 10 == 0:
-        print(
-            f"Epoch:{epoch} | Discriminator Loss: {loss_D.item():.4f} | Generator Loss: {loss_G.item():.4f} | Validation Discriminator Loss: {avg_val_loss:.4f}")
-
-# Testing
-generator.eval()
-discriminator.eval()
-
-test_loss_D = 0.0
-
-with torch.inference_mode():
-    for test_real, in test_dataloader:
-        test_real = test_real.to(device)
-        test_batch_size = test_real.size(0)
-
-        test_real_labels = torch.ones((test_batch_size, 1), device=device)
-        test_preds = discriminator(test_real)
-        test_loss = criterion(test_preds, test_real_labels)
-        test_loss_D += test_loss.item()
-
-    avg_test_loss = test_loss_D / len(test_dataloader)
-
-    # Generate final synthetic waveforms using the fully trained Generator
-    final_noise = torch.randn(batch_size, latent_dim, device=device)
-    final_synthetic_waveforms = generator(final_noise)
-
-print(f"Final Test Discriminator Loss: {avg_test_loss:.4f}")
-print(f"Generated {final_synthetic_waveforms.size(0)} ")
