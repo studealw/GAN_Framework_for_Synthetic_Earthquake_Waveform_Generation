@@ -232,18 +232,96 @@ decoder.eval()
 critic.eval()
 test_recon_error = 0.0
 
+# 1. Create empty lists to collect the data
+all_real = []
+all_fake = []
+all_cond = []
+
 with torch.inference_mode():
     for test_real, test_c in test_dataloader:
         test_real, test_c = test_real.to(device), test_c.to(device)
 
+        # Forward pass
         mu, logvar = encoder(test_real, test_c)
         z = reparameterize(mu, logvar)
         test_fake = decoder(z, test_c)
+        
         test_recon_error += criterion_recon(test_fake, test_real).item()
+        
+        # 2. Move tensors to CPU, convert to numpy, and save to lists
+        all_real.append(test_real.cpu().numpy())
+        all_fake.append(test_fake.cpu().numpy())
+        all_cond.append(test_c.cpu().numpy())
 
 avg_test_recon = test_recon_error / len(test_dataloader)
 print(f"Final Test Reconstruction Error (L1): {avg_test_recon:.4f}")
 
+# SAVING THE MODELS
+torch.save(encoder.state_dict(), "encoder_weights.pth")
+torch.save(decoder.state_dict(), "decoder_weights.pth")
+torch.save(critic.state_dict(), "critic_weights.pth")
+print("SAVED THE MODEL WEIGHTS")
+
+# 3. Stitch the lists into massive numpy arrays (Exactly what your plot needs!)
+import numpy as np
+real_final = np.concatenate(all_real, axis=0)
+pred_R_final = np.concatenate(all_fake, axis=0)
+y_test_R = np.concatenate(all_cond, axis=0)
+
+print(f"Shapes for plotting -> Real: {real_final.shape}, Fake: {pred_R_final.shape}")
+
+# ---------------------------------------------------------
+# CLEAN 4-SAMPLE PLOTTING SCRIPT 
+# ---------------------------------------------------------
+import matplotlib.pyplot as plt
+from scipy.signal import spectrogram
+import numpy as np
+import random
+
+print("Generating Clean Grid for 4 Earthquakes...")
+ch = 0 # 0: NS, 1: EW, 2: UD
+cmap = "viridis"
+N = pred_R_final.shape[0]
+
+# Sample exactly 4 random indices
+idxs = random.sample(range(N), 4)
+
+# Build an 8x2 grid (4 earthquakes * 2 rows each)
+fig, axes = plt.subplots(8, 2, figsize=(15, 16), constrained_layout=True)
+
+for r, k in enumerate(idxs):
+    real = real_final[k, ch]
+    fake = pred_R_final[k, ch]
+    mag = y_test_R[k, 0] 
+    
+    # ------------------ Waveforms ------------------
+    axes[2*r, 0].plot(real)
+    axes[2*r, 0].set_title(f"Real Wave | idx={k} | Norm M={mag:.2f}")
+    axes[2*r, 0].margins(x=0)
+    
+    axes[2*r, 1].plot(fake)
+    axes[2*r, 1].set_title(f"Generated Wave | idx={k} | Norm M={mag:.2f}")
+    axes[2*r, 1].margins(x=0)
+    
+    # ----------------- Spectrograms -----------------
+    f1, t1, S1 = spectrogram(real, fs=100, nperseg=20, noverlap=10)
+    f2, t2, S2 = spectrogram(fake, fs=100, nperseg=20, noverlap=10)
+    
+    S1_db = 10 * np.log10(S1 + 1e-8)
+    S2_db = 10 * np.log10(S2 + 1e-8)
+    
+    vmin = S1_db.min()
+    vmax = S1_db.max()
+    
+    im1 = axes[2*r+1, 0].pcolormesh(t1, f1, S1_db, shading='gouraud', cmap=cmap, vmin=vmin, vmax=vmax)
+    axes[2*r+1, 0].set_ylabel("Freq (Hz)")
+    fig.colorbar(im1, ax=axes[2*r+1, 0], label="dB")
+    
+    im2 = axes[2*r+1, 1].pcolormesh(t2, f2, S2_db, shading='gouraud', cmap=cmap, vmin=vmin, vmax=vmax)
+    axes[2*r+1, 1].set_ylabel("Freq (Hz)")
+    fig.colorbar(im2, ax=axes[2*r+1, 1], label="dB")
+
+plt.show()
 # SAVING THE MODELS
 
 torch.save(encoder.state_dict(), "encoder_weights.pth")
