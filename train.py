@@ -11,7 +11,7 @@ from model import (
 )
 import pandas as pd
 from torch.utils.data import Dataset
-
+import numpy as np
 # Device configuration
 device = torch.device(
     "cuda") if torch.cuda.is_available() else torch.device("cpu")
@@ -32,88 +32,70 @@ lambda_gp = 10.0      # Gradient Penalty weight
 lambda_recon = 10.0   # Reconstruction loss weight
 lambda_kl = 0.5       # KL divergence weight
 
-
-class EarthquakeDataset(Dataset):
-    def __init__(self, metadata_csv="waveform/waveform.csv", waveform_folder="./waveform", sequence_length=100):
-        self.df = pd.read_csv(metadata_csv)
+class EarthquakeNumpyDataset(Dataset):
+    def __init__(self, metadata_csv, waveform_npy, sequence_length=100):
         self.seq_length = sequence_length
-        self.waveform_folder = waveform_folder
-
-        # 1. Map all files in all subfolders dynamically
-        print("Scanning subfolders for waveform files...")
-        self.file_map = {}
-        for root, dirs, files in os.walk(self.waveform_folder):
-            for file in files:
-                # Ignore the metadata file if it is in the same folder!
-                if file.lower().endswith('.csv') and file.lower() != 'waveform.csv':
-                    self.file_map[file] = os.path.join(root, file)
-
-                else:
-                    print("Dataset Not Found")
-                    return 0
-        print(f"Found {len(self.file_map)} waveform files.")
-
-        # 2. Extract 7 Real Conditional Parameters from the CSV
+        
+        # 1. Read Metadata
+        self.df = pd.read_csv(metadata_csv)
+        
+        # 2. Extract ONLY the 7 required columns (Matching your TF Notebook)
         cond_cols = [
-            'Magnitude', 'EQ_Depth(km)', 'Epicentral_Distance_km',
-            'Station Height(m)', 'Station_Lat', 'Station_Lon', 'PGA_UD(gal)'
+            'Magnitude', 'Epicenter_Lat', 'Epicenter_Lon', 
+            'EQ_Depth(km)', 'Station_Lat', 'Station_Lon', 'Epicentral_Distance_km'
         ]
-        self.conditions = self.df[cond_cols].values
-
-        # Normalize the conditions (Crucial for the Generator to learn)
+        self.conditions = self.df[cond_cols].values.astype(np.float32)
+        
+        # Normalize conditions (Z-score scaling)
         self.cond_mean = self.conditions.mean(axis=0)
         self.cond_std = self.conditions.std(axis=0) + 1e-8
         self.conditions = (self.conditions - self.cond_mean) / self.cond_std
+        
+        # 3. Load Waveforms from .npy (COMPLETELY IGNORES THE F: DRIVE)
+        raw_waveforms = np.load(waveform_npy).astype(np.float32)
+        
+        # Truncate to N to match CSV length
+        N = len(self.df)
+        raw_waveforms = raw_waveforms[:N]
+        
+        # Transpose from (Batch, Time, Channels) -> (Batch, Channels, Time) -> (N, 3, 100)
+        raw_waveforms = np.transpose(raw_waveforms, (0, 2, 1))
+        
+        # Normalize waveforms (Z-score per channel, per waveform)
+        means = raw_waveforms.mean(axis=2, keepdims=True)
+        stds = raw_waveforms.std(axis=2, keepdims=True) + 1e-8
+        self.waveforms = (raw_waveforms - means) / stds
+        
+        # 4. Convert to PyTorch Tensors
+        self.waveforms = torch.tensor(self.waveforms, dtype=torch.float32)
+        self.conditions = torch.tensor(self.conditions, dtype=torch.float32)
 
     def __len__(self):
         return len(self.df)
 
     def __getitem__(self, idx):
-        row = self.df.iloc[idx]
+        # Returns the pre-loaded, pre-normalized tensors instantly
+        return self.waveforms[idx], self.conditions[idx]
 
-        ns_name = os.path.basename(row['NS_Waveform_File'])
-        ew_name = os.path.basename(row['EW_Waveform_File'])
-        up_name = os.path.basename(row['UP_Waveform_File'])
+# Dataloaders
 
-        ns_path = self.file_map.get(ns_name)
-        ew_path = self.file_map.get(ew_name)
-        up_path = self.file_map.get(up_name)
-
-        channels_data = []
-        for path in [ns_path, ew_path, up_path]:
-            if path and os.path.exists(path):
-                raw_data = pd.read_csv(path).iloc[:, 0].values
-                data_window = raw_data[:self.seq_length]
-
-                # Normalize directly without filtering
-                data_window = (data_window - data_window.mean()
-                               ) / (data_window.std() + 1e-8)
-                channels_data.append(data_window)
-            else:
-                # Removed dummy data call; strict failure on missing data
-                raise FileNotFoundError(
-                    f"Missing waveform file for index {idx}: {path}")
-
-        waveforms = torch.tensor(channels_data, dtype=torch.float32)
-        conditions = torch.tensor(self.conditions[idx], dtype=torch.float32)
-
-        return waveforms, conditions
-
-
-# DATA LOADERS
-dataset = EarthquakeDataset(
-    metadata_csv="waveform/waveform.csv",
-    waveform_folder="./waveform",
-    sequence_length=100
+dataset = EarthquakeNumpyDataset(
+    metadata_csv=r"waveform_folder\train_tab_MAG_data_3_SEC.csv",
+    # PUT THE EXACT PATH TO YOUR .NPY FILE HERE:
+    waveform_npy=r"C:\Users\JAY\Downloads\Train_waveform_MAG_data_3C.npy", 
+    sequence_length=sequence_length
 )
-train_set, val_set, test_set = torch.utils.data.random_split(dataset, [
-                                                             0.7, 0.15, 0.15])
-dataloader = DataLoader(train_set, batch_size=batch_size,
-                        shuffle=True, drop_last=True)
-val_dataloader = DataLoader(
-    val_set, batch_size=batch_size, shuffle=False, drop_last=True)
-test_dataloader = DataLoader(
-    test_set, batch_size=batch_size, shuffle=False, drop_last=True)
+
+# Split the dataset
+train_size = int(0.7 * len(dataset))
+val_size = int(0.15 * len(dataset))
+test_size = len(dataset) - train_size - val_size
+
+train_set, val_set, test_set = torch.utils.data.random_split(dataset, [train_size, val_size, test_size])
+
+dataloader = DataLoader(train_set, batch_size=batch_size, shuffle=True, drop_last=True)
+val_dataloader = DataLoader(val_set, batch_size=batch_size, shuffle=False, drop_last=True)
+test_dataloader = DataLoader(test_set, batch_size=batch_size, shuffle=False, drop_last=True)
 
 # Calling the Models
 encoder = EncoderModel(sequence_length=sequence_length, channels=channels,
@@ -141,8 +123,6 @@ scheduler_C = optim.lr_scheduler.CosineAnnealingLR(optimizer_C, T_max=epochs)
 criterion_recon = nn.L1Loss()
 
 # GP function
-
-
 def compute_gradient_penalty(critic, real_samples, fake_samples, conditions, device):
     alpha = torch.rand((real_samples.size(0), 1, 1), device=device)
     interpolates = (alpha * real_samples + ((1 - alpha)
@@ -209,7 +189,7 @@ for epoch in range(epochs):
             # Calculate the 3 Generator Losses
             loss_adv = -torch.mean(critic_fake_G)
             loss_recon = criterion_recon(fake_waveforms, real_waveforms)
-            loss_kl = -0.5 * torch.mean(1 + logvar - mu.pow(2) - logvar.exp())
+            loss_kl = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1).mean()
 
             loss_G_total = loss_adv + \
                 (lambda_recon * loss_recon) + (lambda_kl * loss_kl)
