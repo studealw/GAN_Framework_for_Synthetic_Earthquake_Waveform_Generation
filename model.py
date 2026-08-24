@@ -36,48 +36,54 @@ class DecoderGeneratorModel(nn.Module):
             nn.LeakyReLU(0.2)
         )
 
-        self.conv_block_1 = nn.Sequential(
-            nn.ConvTranspose1d(
+        self.upsample_1 = nn.Sequential(
+            nn.Upsample(scale_factor=5, mode = "nearest"),
+            nn.Conv1d(
                 in_channels=256,
                 out_channels=128,
-                kernel_size=5,
-                stride=5,
-                padding=0
+                kernel_size=3,
+                stride=1,
+                padding=1
             ),
             nn.GroupNorm(1, 128),
             nn.LeakyReLU(0.2)
         )
 
-        self.conv_block_2 = nn.Sequential(
-            nn.ConvTranspose1d(
+        self.upsample_2 = nn.Sequential(
+            nn.Upsample(scale_factor=2, mode = "nearest"),
+            nn.Conv1d(
                 in_channels=128,
                 out_channels=64,
-                kernel_size=4,
-                stride=2,
+                kernel_size=3,
                 padding=1
             ),
             nn.GroupNorm(1, 64),
             nn.Tanh()
         )
 
-        self.conv_block_3 = nn.Sequential(
-            nn.ConvTranspose1d(
+        self.upsample_3 = nn.Sequential(
+            nn.Upsample(scale_factor=2, mode = "nearest"),
+            nn.Conv1d(
                 in_channels=64,
                 out_channels=3,
-                kernel_size=4,
-                stride=2,
+                kernel_size=3,
                 padding=1
             ),
             # nn.LeakyReLU(0.2)
         )
 
     def forward(self, z, c):
+        
         z_cond = torch.cat((z, c), dim=1)
+        
+  
         x = self.initial_dense(z_cond)
         x = x.view(-1, 256, 5)
-        x = self.conv_block_1(x)
-        x = self.conv_block_2(x)
-        x = self.conv_block_3(x)
+        
+
+        x = self.upsample_1(x)
+        x = self.upsample_2(x)
+        x = self.upsample_3(x)
 
         return x
 
