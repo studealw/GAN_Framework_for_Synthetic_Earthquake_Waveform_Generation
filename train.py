@@ -31,41 +31,63 @@ n_critic = 5  # Number of critic updates per generator update
 lambda_gp = 10.0      # Gradient Penalty weight
 lambda_recon = 10.0   # Reconstruction loss weight
 lambda_kl = 0.5       # KL divergence weight
+# NEW: Spectral loss weight (tune this between 0.1 and 10.0)
+lambda_spectral = 1.0
+
+
+class SpectralLoss(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.l1_loss = nn.L1Loss()
+
+    def forward(self, fake_waveforms, real_waveforms):
+        # Compute the 1D Real FFT along the time dimension (dim=-1)
+        fft_fake = torch.fft.rfft(fake_waveforms, dim=-1)
+        fft_real = torch.fft.rfft(real_waveforms, dim=-1)
+
+        # Get the magnitude (amplitude) of the frequencies
+        mag_fake = torch.abs(fft_fake)
+        mag_real = torch.abs(fft_real)
+
+        # Calculate L1 loss on the frequency magnitudes
+        loss = self.l1_loss(mag_fake, mag_real)
+        return loss
+
 
 class EarthquakeNumpyDataset(Dataset):
     def __init__(self, metadata_csv, waveform_npy, sequence_length=100):
         self.seq_length = sequence_length
-        
+
         # 1. Read Metadata
         self.df = pd.read_csv(metadata_csv)
-        
+
         # 2. Extract ONLY the 7 required columns (Matching your TF Notebook)
         cond_cols = [
-            'Magnitude', 'Epicenter_Lat', 'Epicenter_Lon', 
+            'Magnitude', 'Epicenter_Lat', 'Epicenter_Lon',
             'EQ_Depth(km)', 'Station_Lat', 'Station_Lon', 'Epicentral_Distance_km'
         ]
         self.conditions = self.df[cond_cols].values.astype(np.float32)
-        
+
         # Normalize conditions (Z-score scaling)
         self.cond_mean = self.conditions.mean(axis=0)
         self.cond_std = self.conditions.std(axis=0) + 1e-8
         self.conditions = (self.conditions - self.cond_mean) / self.cond_std
-        
+
         # 3. Load Waveforms from .npy (COMPLETELY IGNORES THE F: DRIVE)
         raw_waveforms = np.load(waveform_npy).astype(np.float32)
-        
+
         # Truncate to N to match CSV length
         N = len(self.df)
         raw_waveforms = raw_waveforms[:N]
-        
+
         # Transpose from (Batch, Time, Channels) -> (Batch, Channels, Time) -> (N, 3, 100)
         raw_waveforms = np.transpose(raw_waveforms, (0, 2, 1))
-        
+
         # Normalize waveforms (Z-score per channel, per waveform)
         means = raw_waveforms.mean(axis=2, keepdims=True)
         stds = raw_waveforms.std(axis=2, keepdims=True) + 1e-8
         self.waveforms = (raw_waveforms - means) / stds
-        
+
         # 4. Convert to PyTorch Tensors
         self.waveforms = torch.tensor(self.waveforms, dtype=torch.float32)
         self.conditions = torch.tensor(self.conditions, dtype=torch.float32)
@@ -79,10 +101,11 @@ class EarthquakeNumpyDataset(Dataset):
 
 # Dataloaders
 
+
 dataset = EarthquakeNumpyDataset(
     metadata_csv=r"waveform_folder\train_tab_MAG_data_3_SEC.csv",
     # PUT THE EXACT PATH TO YOUR .NPY FILE HERE:
-    waveform_npy=r"C:\Users\JAY\Downloads\Train_waveform_MAG_data_3C.npy", 
+    waveform_npy=r"C:\Users\JAY\Downloads\Train_waveform_MAG_data_3C.npy",
     sequence_length=sequence_length
 )
 
@@ -91,11 +114,15 @@ train_size = int(0.7 * len(dataset))
 val_size = int(0.15 * len(dataset))
 test_size = len(dataset) - train_size - val_size
 
-train_set, val_set, test_set = torch.utils.data.random_split(dataset, [train_size, val_size, test_size])
+train_set, val_set, test_set = torch.utils.data.random_split(
+    dataset, [train_size, val_size, test_size])
 
-dataloader = DataLoader(train_set, batch_size=batch_size, shuffle=True, drop_last=True)
-val_dataloader = DataLoader(val_set, batch_size=batch_size, shuffle=False, drop_last=True)
-test_dataloader = DataLoader(test_set, batch_size=batch_size, shuffle=False, drop_last=True)
+dataloader = DataLoader(train_set, batch_size=batch_size,
+                        shuffle=True, drop_last=True)
+val_dataloader = DataLoader(
+    val_set, batch_size=batch_size, shuffle=False, drop_last=True)
+test_dataloader = DataLoader(
+    test_set, batch_size=batch_size, shuffle=False, drop_last=True)
 
 # Calling the Models
 encoder = EncoderModel(sequence_length=sequence_length, channels=channels,
@@ -121,8 +148,12 @@ scheduler_C = optim.lr_scheduler.CosineAnnealingLR(optimizer_C, T_max=epochs)
 
 # Reconstruction Loss (Mean Absolute Error)
 criterion_recon = nn.L1Loss()
+# Spectral Loss
+criterion_spectral = SpectralLoss().to(device)
 
 # GP function
+
+
 def compute_gradient_penalty(critic, real_samples, fake_samples, conditions, device):
     alpha = torch.rand((real_samples.size(0), 1, 1), device=device)
     interpolates = (alpha * real_samples + ((1 - alpha)
@@ -189,10 +220,15 @@ for epoch in range(epochs):
             # Calculate the 3 Generator Losses
             loss_adv = -torch.mean(critic_fake_G)
             loss_recon = criterion_recon(fake_waveforms, real_waveforms)
-            loss_kl = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1).mean()
+            loss_kl = -0.5 * \
+                torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1).mean()
 
+            # Spectral Loss
+            criterion_spectral = SpectralLoss().to(device)
+            loss_spectral = criterion_spectral(fake_waveforms, real_waveforms)
             loss_G_total = loss_adv + \
-                (lambda_recon * loss_recon) + (lambda_kl * loss_kl)
+                (lambda_recon * loss_recon) + (lambda_kl *
+                                               loss_kl) + (lambda_spectral * loss_spectral)
 
             loss_G_total.backward()
             optimizer_E.step()
@@ -223,105 +259,11 @@ for epoch in range(epochs):
     avg_val_recon = val_recon_error / len(val_dataloader)
 
     if epoch % 1 == 0:
-        print(f"Epoch [{epoch+1}/{epochs}] | Critic Loss: {loss_C.item():.4f} | Gen Total Loss: {loss_G_total.item():.4f} | Val Recon Error: {avg_val_recon:.4f}")
+        print(f"Epoch [{epoch+1}/{epochs}] | Critic: {loss_C.item():.4f} | "
+              f"Gen Total: {loss_G_total.item():.4f} | Recon (L1): {avg_val_recon:.4f} | "
+              f"Spectral: {loss_spectral.item():.4f}")
 
-# TESTING
-print("\n--- Training Complete. Starting Testing Phase ---")
-encoder.eval()
-decoder.eval()
-critic.eval()
-test_recon_error = 0.0
 
-# 1. Create empty lists to collect the data
-all_real = []
-all_fake = []
-all_cond = []
-
-with torch.inference_mode():
-    for test_real, test_c in test_dataloader:
-        test_real, test_c = test_real.to(device), test_c.to(device)
-
-        # Forward pass
-        mu, logvar = encoder(test_real, test_c)
-        z = reparameterize(mu, logvar)
-        test_fake = decoder(z, test_c)
-        
-        test_recon_error += criterion_recon(test_fake, test_real).item()
-        
-        # 2. Move tensors to CPU, convert to numpy, and save to lists
-        all_real.append(test_real.cpu().numpy())
-        all_fake.append(test_fake.cpu().numpy())
-        all_cond.append(test_c.cpu().numpy())
-
-avg_test_recon = test_recon_error / len(test_dataloader)
-print(f"Final Test Reconstruction Error (L1): {avg_test_recon:.4f}")
-
-# SAVING THE MODELS
-torch.save(encoder.state_dict(), "encoder_weights.pth")
-torch.save(decoder.state_dict(), "decoder_weights.pth")
-torch.save(critic.state_dict(), "critic_weights.pth")
-print("SAVED THE MODEL WEIGHTS")
-
-# 3. Stitch the lists into massive numpy arrays (Exactly what your plot needs!)
-import numpy as np
-real_final = np.concatenate(all_real, axis=0)
-pred_R_final = np.concatenate(all_fake, axis=0)
-y_test_R = np.concatenate(all_cond, axis=0)
-
-print(f"Shapes for plotting -> Real: {real_final.shape}, Fake: {pred_R_final.shape}")
-
-# ---------------------------------------------------------
-# CLEAN 4-SAMPLE PLOTTING SCRIPT 
-# ---------------------------------------------------------
-import matplotlib.pyplot as plt
-from scipy.signal import spectrogram
-import numpy as np
-import random
-
-print("Generating Clean Grid for 4 Earthquakes...")
-ch = 0 # 0: NS, 1: EW, 2: UD
-cmap = "viridis"
-N = pred_R_final.shape[0]
-
-# Sample exactly 4 random indices
-idxs = random.sample(range(N), 4)
-
-# Build an 8x2 grid (4 earthquakes * 2 rows each)
-fig, axes = plt.subplots(8, 2, figsize=(15, 16), constrained_layout=True)
-
-for r, k in enumerate(idxs):
-    real = real_final[k, ch]
-    fake = pred_R_final[k, ch]
-    mag = y_test_R[k, 0] 
-    
-    # ------------------ Waveforms ------------------
-    axes[2*r, 0].plot(real)
-    axes[2*r, 0].set_title(f"Real Wave | idx={k} | Norm M={mag:.2f}")
-    axes[2*r, 0].margins(x=0)
-    
-    axes[2*r, 1].plot(fake)
-    axes[2*r, 1].set_title(f"Generated Wave | idx={k} | Norm M={mag:.2f}")
-    axes[2*r, 1].margins(x=0)
-    
-    # ----------------- Spectrograms -----------------
-    f1, t1, S1 = spectrogram(real, fs=100, nperseg=20, noverlap=10)
-    f2, t2, S2 = spectrogram(fake, fs=100, nperseg=20, noverlap=10)
-    
-    S1_db = 10 * np.log10(S1 + 1e-8)
-    S2_db = 10 * np.log10(S2 + 1e-8)
-    
-    vmin = S1_db.min()
-    vmax = S1_db.max()
-    
-    im1 = axes[2*r+1, 0].pcolormesh(t1, f1, S1_db, shading='gouraud', cmap=cmap, vmin=vmin, vmax=vmax)
-    axes[2*r+1, 0].set_ylabel("Freq (Hz)")
-    fig.colorbar(im1, ax=axes[2*r+1, 0], label="dB")
-    
-    im2 = axes[2*r+1, 1].pcolormesh(t2, f2, S2_db, shading='gouraud', cmap=cmap, vmin=vmin, vmax=vmax)
-    axes[2*r+1, 1].set_ylabel("Freq (Hz)")
-    fig.colorbar(im2, ax=axes[2*r+1, 1], label="dB")
-
-plt.show()
 # SAVING THE MODELS
 
 torch.save(encoder.state_dict(), "encoder_weights.pth")
