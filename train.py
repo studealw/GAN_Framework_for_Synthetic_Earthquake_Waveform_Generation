@@ -12,12 +12,14 @@ from model import (
 import pandas as pd
 from torch.utils.data import Dataset
 import numpy as np
+from pathlib import Path
+
 # Device configuration
 device = torch.device(
     "cuda") if torch.cuda.is_available() else torch.device("cpu")
 
 # Hyperparameters
-epochs = 100
+epochs = 1000
 batch_size = 64
 learning_rate = 3e-4
 beta1 = 0.5
@@ -35,22 +37,36 @@ lambda_kl = 0.5       # KL divergence weight
 lambda_spectral = 1.0
 
 
+
 class SpectralLoss(nn.Module):
-    def __init__(self):
+    def __init__(self, n_fft=20, hop_length=10):
         super().__init__()
+        self.n_fft = n_fft
+        self.hop_length = hop_length
         self.l1_loss = nn.L1Loss()
 
     def forward(self, fake_waveforms, real_waveforms):
-        # Compute the 1D Real FFT along the time dimension (dim=-1)
-        fft_fake = torch.fft.rfft(fake_waveforms, dim=-1)
-        fft_real = torch.fft.rfft(real_waveforms, dim=-1)
+        # 1. Reshape from (Batch, Channels, Time) to (Batch * Channels, Time)
+        # torch.stft requires 2D input tensors
+        B, C, T = fake_waveforms.shape
+        fake_flat = fake_waveforms.view(B * C, T)
+        real_flat = real_waveforms.view(B * C, T)
 
-        # Get the magnitude (amplitude) of the frequencies
-        mag_fake = torch.abs(fft_fake)
-        mag_real = torch.abs(fft_real)
+        # 2. Create the window function on the correct device
+        window = torch.hann_window(self.n_fft).to(fake_waveforms.device)
 
-        # Calculate L1 loss on the frequency magnitudes
-        loss = self.l1_loss(mag_fake, mag_real)
+        # 3. Compute STFT (Matches your scipy.signal.spectrogram parameters)
+        stft_fake = torch.stft(fake_flat, n_fft=self.n_fft, hop_length=self.hop_length, 
+                               window=window, return_complex=True)
+        stft_real = torch.stft(real_flat, n_fft=self.n_fft, hop_length=self.hop_length, 
+                               window=window, return_complex=True)
+
+        # 4. Extract magnitude and add epsilon
+        mag_fake = torch.abs(stft_fake) + 1e-8
+        mag_real = torch.abs(stft_real) + 1e-8
+
+        # 5. Calculate L1 loss on the Log Spectrogram
+        loss = self.l1_loss(torch.log(mag_fake), torch.log(mag_real))
         return loss
 
 
@@ -125,13 +141,27 @@ test_dataloader = DataLoader(
     test_set, batch_size=batch_size, shuffle=False, drop_last=True)
 
 # Calling the Models
-encoder = EncoderModel(sequence_length=sequence_length, channels=channels,
-                       latent_dim=latent_dim, cond_dim=cond_dim).to(device)
-decoder_config = DecoderGeneratorModelConfig(
-    latent_dim=latent_dim, cond_dim=cond_dim, channels=channels)
-decoder = DecoderGeneratorModel(decoder_config).to(device)
-critic = CriticModel(CriticConfig(), channels=channels,
-                     sequence_length=sequence_length, cond_dim=cond_dim).to(device)
+
+encoderPath = Path("encoder_weights.pth")
+decoderPath = Path("decoder_weights.pth")   
+criticPath = Path("critic_weights.pth")
+
+encoder = EncoderModel(latent_dim=latent_dim, cond_dim=cond_dim).to(device)
+decoder = DecoderGeneratorModel(DecoderGeneratorModelConfig(
+                latent_dim=latent_dim, cond_dim=cond_dim)).to(device)
+critic = CriticModel(CriticConfig()).to(device)
+
+if (encoderPath.exists() and decoderPath.exists() and criticPath.exists()) :
+
+    encoder.load_state_dict(torch.load("encoder_weights.pth"))
+    decoder.load_state_dict(torch.load("decoder_weights.pth"))
+    critic.load_state_dict(torch.load("critic_weights.pth"))
+
+    print("Model weights loaded successfully.")
+
+else :
+    print("Model weights not found. Starting training from scratch.")
+    
 
 # Optimizers
 optimizer_E = optim.AdamW(encoder.parameters(),

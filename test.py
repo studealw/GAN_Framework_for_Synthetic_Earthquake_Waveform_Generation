@@ -87,6 +87,12 @@ dataset = EarthquakeNumpyDataset(
     sequence_length=sequence_length
 )
 
+test_dataloader = DataLoader(
+    dataset,
+    batch_size=batch_size,
+    shuffle=False
+)
+
 # Inittialize models
 encoder = EncoderModel(latent_dim=latent_dim, cond_dim=cond_dim).to(device)
 decoder = DecoderGeneratorModel(DecoderGeneratorModelConfig(
