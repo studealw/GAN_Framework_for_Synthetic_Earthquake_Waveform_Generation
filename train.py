@@ -254,7 +254,6 @@ for epoch in range(epochs):
                 torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1).mean()
 
             # Spectral Loss
-            criterion_spectral = SpectralLoss().to(device)
             loss_spectral = criterion_spectral(fake_waveforms, real_waveforms)
             loss_G_total = loss_adv + \
                 (lambda_recon * loss_recon) + (lambda_kl *
