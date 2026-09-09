@@ -1,11 +1,8 @@
 import torch
 from torch import nn
 from dataclasses import dataclass
-import torch.optim as optim
-from torch.utils.data import DataLoader, TensorDataset
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
 
 @dataclass
 class DecoderGeneratorModelConfig:
@@ -105,7 +102,8 @@ class CriticModel(nn.Module):
                 stride=2,
                 padding=1
             ),
-            nn.LeakyReLU(0.2)
+            nn.LeakyReLU(0.2),
+            nn.Dropout(0.3)
         )
 
         self.conv_block_2 = nn.Sequential(
@@ -117,7 +115,8 @@ class CriticModel(nn.Module):
                 padding=1
             ),
             nn.GroupNorm(1, 128),
-            nn.LeakyReLU(0.2)
+            nn.LeakyReLU(0.2),
+            nn.Dropout(0.3)
         )
 
         self.conv_block_3 = nn.Sequential(
@@ -129,11 +128,13 @@ class CriticModel(nn.Module):
                 padding=0
             ),
             nn.GroupNorm(1, 256),
-            nn.LeakyReLU(0.2)
+            nn.LeakyReLU(0.2),
+            nn.Dropout(0.3)
         )
 
         self.classifier = nn.Sequential(
             nn.Flatten(),
+            nn.Dropout(0.3),
             nn.Linear(256 * 5, 1)
         )
 
@@ -172,6 +173,7 @@ class EncoderModel(nn.Module):
                 padding=1
             ),
             nn.LeakyReLU(0.2),
+            nn.Dropout(0.2),
 
             nn.Conv1d(
                 in_channels=64,
@@ -182,6 +184,7 @@ class EncoderModel(nn.Module):
             ),
             nn.GroupNorm(1, 128),
             nn.LeakyReLU(0.2),
+            nn.Dropout(0.2),
 
             nn.Conv1d(
                 in_channels=128,
@@ -192,6 +195,7 @@ class EncoderModel(nn.Module):
             ),
             nn.GroupNorm(1, 256),
             nn.LeakyReLU(0.2),
+            nn.Dropout(0.3),
 
             nn.Flatten()
         )
