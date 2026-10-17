@@ -27,12 +27,56 @@ batch_size = 64
 learning_rate = 3e-4
 beta1 = 0.5
 channels = 3
-sequence_length = 100
+sequence_length = 200
 latent_dim = 32
 cond_dim = 7
 n_critic = 5  # Number of critic updates per generator update
 
 
+# class EarthquakeNumpyDataset(Dataset):
+#     def __init__(self, metadata_csv, waveform_npy, sequence_length=100):
+#         self.seq_length = sequence_length
+
+#         # 1. Read Metadata
+#         self.df = pd.read_csv(metadata_csv)
+
+#         # 2. Extract ONLY the 7 required columns (Matching your TF Notebook)
+#         cond_cols = [
+#             'Magnitude', 'Epicenter_Lat', 'Epicenter_Lon',
+#             'EQ_Depth(km)', 'Station_Lat', 'Station_Lon', 'Epicentral_Distance_km'
+#         ]
+#         self.conditions = self.df[cond_cols].values.astype(np.float32)
+
+#         # Normalize conditions (Z-score scaling)
+#         self.cond_mean = self.conditions.mean(axis=0)
+#         self.cond_std = self.conditions.std(axis=0) + 1e-8
+#         self.conditions = (self.conditions - self.cond_mean) / self.cond_std
+
+#         # 3. Load Waveforms from .npy (COMPLETELY IGNORES THE F: DRIVE)
+#         raw_waveforms = np.load(waveform_npy).astype(np.float32)
+
+#         # Truncate to N to match CSV length
+#         N = len(self.df)
+#         raw_waveforms = raw_waveforms[:N]
+
+#         # Transpose from (Batch, Time, Channels) -> (Batch, Channels, Time) -> (N, 3, 100)
+#         raw_waveforms = np.transpose(raw_waveforms, (0, 2, 1))
+
+#         # Normalize waveforms (Z-score per channel, per waveform)
+#         means = raw_waveforms.mean(axis=2, keepdims=True)
+#         stds = raw_waveforms.std(axis=2, keepdims=True) + 1e-8
+#         self.waveforms = (raw_waveforms - means) / stds
+
+#         # 4. Convert to PyTorch Tensors
+#         self.waveforms = torch.tensor(self.waveforms, dtype=torch.float32)
+#         self.conditions = torch.tensor(self.conditions, dtype=torch.float32)
+
+#     def __len__(self):
+#         return len(self.df)
+
+#     def __getitem__(self, idx):
+#         # Returns the pre-loaded, pre-normalized tensors instantly
+#         return self.waveforms[idx], self.conditions[idx]
 class EarthquakeNumpyDataset(Dataset):
     def __init__(self, metadata_csv, waveform_npy, sequence_length=100):
         self.seq_length = sequence_length
@@ -40,7 +84,24 @@ class EarthquakeNumpyDataset(Dataset):
         # 1. Read Metadata
         self.df = pd.read_csv(metadata_csv)
 
-        # 2. Extract ONLY the 7 required columns (Matching your TF Notebook)
+        # NEW: Compute Epicentral Distance if it's missing from the CSV
+        if 'Epicentral_Distance_km' not in self.df.columns:
+            lat1 = np.radians(self.df['Epicenter_Lat'])
+            lon1 = np.radians(self.df['Epicenter_Lon'])
+            lat2 = np.radians(self.df['Station_Lat'])
+            lon2 = np.radians(self.df['Station_Lon'])
+
+            dlat = lat2 - lat1
+            dlon = lon2 - lon1
+
+            a = np.sin(dlat/2.0)**2 + np.cos(lat1) * \
+                np.cos(lat2) * np.sin(dlon/2.0)**2
+            c = 2 * np.arcsin(np.sqrt(a))
+
+            # 6371.0 is the approximate radius of the Earth in km
+            self.df['Epicentral_Distance_km'] = 6371.0 * c
+
+        # 2. Extract ONLY the 7 required columns
         cond_cols = [
             'Magnitude', 'Epicenter_Lat', 'Epicenter_Lon',
             'EQ_Depth(km)', 'Station_Lat', 'Station_Lon', 'Epicentral_Distance_km'
@@ -52,7 +113,7 @@ class EarthquakeNumpyDataset(Dataset):
         self.cond_std = self.conditions.std(axis=0) + 1e-8
         self.conditions = (self.conditions - self.cond_mean) / self.cond_std
 
-        # 3. Load Waveforms from .npy (COMPLETELY IGNORES THE F: DRIVE)
+        # 3. Load Waveforms from .npy
         raw_waveforms = np.load(waveform_npy).astype(np.float32)
 
         # Truncate to N to match CSV length
@@ -80,18 +141,25 @@ class EarthquakeNumpyDataset(Dataset):
 
 
 # Dataloaders
+# dataset = EarthquakeNumpyDataset(
+#     metadata_csv=r"waveform_folder\Test_tab_MAG_data_3_SEC.csv",
+#     # PUT THE EXACT PATH TO YOUR .NPY FILE HERE:
+#     waveform_npy=r"C:\Users\JAY\Downloads\Test_waveform_MAG_data_3C.npy",
+#     sequence_length=sequence_length
+# )
 dataset = EarthquakeNumpyDataset(
-    metadata_csv=r"waveform_folder\Test_tab_MAG_data_3_SEC.csv",
-    # PUT THE EXACT PATH TO YOUR .NPY FILE HERE:
-    waveform_npy=r"C:\Users\JAY\Downloads\Test_waveform_MAG_data_3C.npy",
+    metadata_csv="Test_tab_MAG_data_3_SEC.csv",
+    waveform_npy="Test_waveform_MAG_data_3C.npy",
     sequence_length=sequence_length
 )
 
-# Inittialize models
-encoder = EncoderModel(latent_dim=latent_dim, cond_dim=cond_dim).to(device)
+# Calling the Models
+encoder = EncoderModel(sequence_length=sequence_length,
+                       latent_dim=latent_dim, cond_dim=cond_dim).to(device)
 decoder = DecoderGeneratorModel(DecoderGeneratorModelConfig(
-    latent_dim=latent_dim, cond_dim=cond_dim)).to(device)
-critic = CriticModel(CriticConfig()).to(device)
+    sequence_length=sequence_length, latent_dim=latent_dim, cond_dim=cond_dim)).to(device)
+critic = CriticModel(
+    CriticConfig(), sequence_length=sequence_length).to(device)
 
 # Loading the model weights
 encoder.load_state_dict(torch.load("encoder_weights.pth"))
