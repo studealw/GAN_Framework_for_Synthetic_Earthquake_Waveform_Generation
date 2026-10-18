@@ -152,6 +152,7 @@ dataset = EarthquakeNumpyDataset(
     waveform_npy="Test_waveform_MAG_data_3C.npy",
     sequence_length=sequence_length
 )
+test_dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
 
 # Calling the Models
 encoder = EncoderModel(sequence_length=sequence_length,
@@ -256,4 +257,9 @@ for r, k in enumerate(idxs):
     axes[2*r+1, 1].set_ylabel("Freq (Hz)")
     fig.colorbar(im2, ax=axes[2*r+1, 1], label="dB")
 
-plt.show()
+# plt.show() for local testing, but save the figure for submission
+
+
+# Save the figure to disk for gogole colab
+plt.savefig("earthquake_comparison.png", bbox_inches='tight')
+plt.close()
