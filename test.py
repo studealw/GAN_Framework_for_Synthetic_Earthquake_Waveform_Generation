@@ -257,7 +257,7 @@ for r, k in enumerate(idxs):
     axes[2*r+1, 1].set_ylabel("Freq (Hz)")
     fig.colorbar(im2, ax=axes[2*r+1, 1], label="dB")
 
-# plt.show() for local testing, but save the figure for submission
+# plt.show() for local testing, but save the figure for google colab
 
 
 # Save the figure to disk for gogole colab

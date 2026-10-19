@@ -54,51 +54,6 @@ class SpectralLoss(nn.Module):
         return loss
 
 
-# class EarthquakeNumpyDataset(Dataset):
-#     def __init__(self, metadata_csv, waveform_npy, sequence_length=100):
-#         self.seq_length = sequence_length
-
-#         # 1. Read Metadata
-#         self.df = pd.read_csv(metadata_csv)
-
-#         # 2. Extract ONLY the 7 required columns (Matching your TF Notebook)
-#         cond_cols = [
-#             'Magnitude', 'Epicenter_Lat', 'Epicenter_Lon',
-#             'EQ_Depth(km)', 'Station_Lat', 'Station_Lon', 'Epicentral_Distance_km'
-#         ]
-#         self.conditions = self.df[cond_cols].values.astype(np.float32)
-
-#         # Normalize conditions (Z-score scaling)
-#         self.cond_mean = self.conditions.mean(axis=0)
-#         self.cond_std = self.conditions.std(axis=0) + 1e-8
-#         self.conditions = (self.conditions - self.cond_mean) / self.cond_std
-
-#         # 3. Load Waveforms from .npy (COMPLETELY IGNORES THE F: DRIVE)
-#         raw_waveforms = np.load(waveform_npy).astype(np.float32)
-
-#         # Truncate to N to match CSV length
-#         N = len(self.df)
-#         raw_waveforms = raw_waveforms[:N]
-
-#         # Transpose from (Batch, Time, Channels) -> (Batch, Channels, Time) -> (N, 3, 100)
-#         raw_waveforms = np.transpose(raw_waveforms, (0, 2, 1))
-
-#         # Normalize waveforms (Z-score per channel, per waveform)
-#         means = raw_waveforms.mean(axis=2, keepdims=True)
-#         stds = raw_waveforms.std(axis=2, keepdims=True) + 1e-8
-#         self.waveforms = (raw_waveforms - means) / stds
-
-#         # 4. Convert to PyTorch Tensors
-#         self.waveforms = torch.tensor(self.waveforms, dtype=torch.float32)
-#         self.conditions = torch.tensor(self.conditions, dtype=torch.float32)
-
-#     def __len__(self):
-#         return len(self.df)
-
-#     def __getitem__(self, idx):
-#         # Returns the pre-loaded, pre-normalized tensors instantly
-#         return self.waveforms[idx], self.conditions[idx]
-
 class EarthquakeNumpyDataset(Dataset):
     def __init__(self, metadata_csv, waveform_npy, sequence_length=200):
         self.seq_length = sequence_length
@@ -159,7 +114,8 @@ class EarthquakeNumpyDataset(Dataset):
 #     # PUT THE EXACT PATH TO YOUR .NPY FILE HERE:
 #     waveform_npy=r"C:\Users\JAY\Downloads\Train_waveform_MAG_data_3C.npy",
 #     sequence_length=sequence_length
-# )
+# ).
+# Change this for appropriate path
 dataset = EarthquakeNumpyDataset(
     metadata_csv="Train_tab_MAG_data_3_SEC.csv",
     waveform_npy="Train_waveform_MAG_data_3C.npy",
