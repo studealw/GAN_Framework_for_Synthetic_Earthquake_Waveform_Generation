@@ -38,6 +38,19 @@ class ResBlock_1d(nn.Module):
         out = self.norm2(self.conv2(out))
         return self.act(out + res)
 
+class SelfAttention(nn.Module):
+
+    def __init__(self, embd_dim, num_heads):
+        self.mha = nn.MultiheadAttention(embd_dim, num_heads, batch_first=True)
+        self.norm = nn.LayerNorm(embd_dim)
+
+    def forward(self, x):
+
+        x = x.transpose(1, 2)  # (batch_size, channels, seq_length) -> (batch_size, seq_length, channels)
+        attn_output, _ = self.mha(x, x, x)
+        x = self.norm(attn_output + x)  # Residual connection and layer normalization
+
+        return x.transpose(1, 2)  # (batch_size, seq_length, channels) -> (batch_size, channels, seq_length)
 class DecoderGeneratorModel(nn.Module):
     def __init__(self, config: DecoderGeneratorModelConfig):
         super().__init__()
