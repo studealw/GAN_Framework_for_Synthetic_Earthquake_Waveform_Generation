@@ -63,34 +63,20 @@ class DecoderGeneratorModel(nn.Module):
             nn.LeakyReLU(0.2)
         )
 
+        self.attention = SelfAttention(256, 4)
+
         self.upsample_1 = nn.Sequential(
-            nn.Upsample(scale_factor=5, mode = "nearest"),
-            nn.Conv1d(
-                in_channels=256,
-                out_channels=128,
-                kernel_size=3,
-                stride=1,
-                padding=1
-            ),
-            nn.GroupNorm(1, 128),
-            nn.LeakyReLU(0.2)
+            nn.Upsample(scale_factor=5, mode = "linear", align_corners=False),
+            ResBlock_1d(in_channels=256, out_channels=128, stride=1),
         )
 
         self.upsample_2 = nn.Sequential(
-            nn.Upsample(scale_factor=2, mode = "nearest"),
-            nn.Conv1d(
-                in_channels=128,
-                out_channels=64,
-                kernel_size=3,
-                padding=1
-            ),
-            nn.GroupNorm(1, 64),
-            # nn.Tanh()
-            nn.LeakyReLU(0.2)
+            nn.Upsample(scale_factor=2, mode = "linear", align_corners=False),
+            ResBlock_1d(in_channels=128, out_channels=64, stride=1)
         )
 
         self.upsample_3 = nn.Sequential(
-            nn.Upsample(scale_factor=2, mode = "nearest"),
+            nn.Upsample(scale_factor=2, mode = "linear", align_corners=False),
             nn.Conv1d(
                 in_channels=64,
                 out_channels=3,
