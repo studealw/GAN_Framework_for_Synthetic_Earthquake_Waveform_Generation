@@ -20,6 +20,23 @@ class DecoderGeneratorModelConfig:
 class CriticConfig:
     batch_size: int = 32
 
+class ResBlock_1d(nn.Module):
+
+    def __init__(self, in_channels, out_channels, stride=1):
+        super().__init__()
+
+        self.conv1 = nn.Conv1d(in_channels, out_channels, kernel_size=3, stride=stride, padding=1)
+        self.norm1 = nn.GroupNorm(1, out_channels)
+        self.act = nn.LeakyReLU(0.2)
+        
+        self.conv2 = nn.Conv1d(out_channels, out_channels, kernel_size=3, padding=1)
+        self.norm2 = nn.GroupNorm(1, out_channels)
+
+    def forward(self, x):
+        res = self.skip(x)
+        out = self.act(self.norm1(self.conv1(x)))
+        out = self.norm2(self.conv2(out))
+        return self.act(out + res)
 
 class DecoderGeneratorModel(nn.Module):
     def __init__(self, config: DecoderGeneratorModelConfig):
