@@ -32,6 +32,11 @@ class ResBlock_1d(nn.Module):
         self.conv2 = nn.Conv1d(out_channels, out_channels, kernel_size=3, padding=1)
         self.norm2 = nn.GroupNorm(1, out_channels)
 
+        self.skip = nn.Identity()
+        if stride != 1 or in_channels != out_channels:
+            self.skip = nn.Conv1d(in_channels, out_channels, kernel_size=1, stride=stride)
+
+
     def forward(self, x):
         res = self.skip(x)
         out = self.act(self.norm1(self.conv1(x)))
@@ -94,7 +99,7 @@ class DecoderGeneratorModel(nn.Module):
         x = self.initial_dense(z_cond)
         x = x.view(-1, 256, 5)
         
-
+        x = self.attention(x)
         x = self.upsample_1(x)
         x = self.upsample_2(x)
         x = self.upsample_3(x)
@@ -123,18 +128,7 @@ class CriticModel(nn.Module):
             # nn.Dropout(0.3)
         )
 
-        self.conv_block_2 = nn.Sequential(
-            nn.Conv1d(
-                in_channels=64,
-                out_channels=128,
-                kernel_size=4,
-                stride=2,
-                padding=1
-            ),
-            nn.GroupNorm(1, 128),
-            nn.LeakyReLU(0.2),
-            # nn.Dropout(0.3)
-        )
+        self.conv_block_2 = ResBlock_1d(64, 128, stride=2)
 
         self.conv_block_3 = nn.Sequential(
             nn.Conv1d(
@@ -148,6 +142,8 @@ class CriticModel(nn.Module):
             nn.LeakyReLU(0.2),
             # nn.Dropout(0.3)
         )
+
+        self.attention = SelfAttention(embed_dim=256, num_heads=4)
 
         self.classifier = nn.Sequential(
             nn.Flatten(),
@@ -165,6 +161,7 @@ class CriticModel(nn.Module):
         x = self.conv_block_2(x)
         x = self.conv_block_3(x)
 
+        x = self.attention(x)
         x = self.classifier(x)
 
         return x
@@ -192,23 +189,14 @@ class EncoderModel(nn.Module):
             nn.LeakyReLU(0.2),
             nn.Dropout(0.2),
 
-            nn.Conv1d(
-                in_channels=64,
-                out_channels=128,
-                kernel_size=4,
-                stride=2,
-                padding=1
-            ),
-            nn.GroupNorm(1, 128),
-            nn.LeakyReLU(0.2),
-            nn.Dropout(0.2),
+            ResBlock_1d(64, 128, stride=2),
 
             nn.Conv1d(
                 in_channels=128,
                 out_channels=256,
-                kernel_size=5,
+                kernel_size=7,
                 stride=5,
-                padding=0
+                padding=1
             ),
             nn.GroupNorm(1, 256),
             nn.LeakyReLU(0.2),
