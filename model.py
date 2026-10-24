@@ -58,7 +58,8 @@ class DecoderGeneratorModel(nn.Module):
                 padding=1
             ),
             nn.GroupNorm(1, 64),
-            nn.Tanh()
+            # nn.Tanh()
+            nn.LeakyReLU(0.2)
         )
 
         self.upsample_3 = nn.Sequential(
@@ -103,7 +104,8 @@ class CriticModel(nn.Module):
                 stride=2,
                 padding=1
             ),
-            nn.LeakyReLU(0.2)
+            nn.LeakyReLU(0.2),
+            # nn.Dropout(0.3)
         )
 
         self.conv_block_2 = nn.Sequential(
@@ -115,7 +117,8 @@ class CriticModel(nn.Module):
                 padding=1
             ),
             nn.GroupNorm(1, 128),
-            nn.LeakyReLU(0.2)
+            nn.LeakyReLU(0.2),
+            # nn.Dropout(0.3)
         )
 
         self.conv_block_3 = nn.Sequential(
@@ -127,7 +130,8 @@ class CriticModel(nn.Module):
                 padding=0
             ),
             nn.GroupNorm(1, 256),
-            nn.LeakyReLU(0.2)
+            nn.LeakyReLU(0.2),
+            # nn.Dropout(0.3)
         )
 
         self.classifier = nn.Sequential(
