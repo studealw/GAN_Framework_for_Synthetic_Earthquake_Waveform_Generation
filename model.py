@@ -46,7 +46,7 @@ class ResBlock_1d(nn.Module):
 class SelfAttention(nn.Module):
 
     def __init__(self, embd_dim, num_heads):
-        self.mha = nn.MultiheadAttention(embd_dim, num_heads, batch_first=True)
+        self.mha = nn.MultiheadAttention(embd_dim, num_heads,batch_first=True,dropout=0.1)
         self.norm = nn.LayerNorm(embd_dim)
 
     def forward(self, x):
@@ -147,7 +147,7 @@ class CriticModel(nn.Module):
 
         self.classifier = nn.Sequential(
             nn.Flatten(),
-            nn.Dropout(0.3),
+            # nn.Dropout(0.3),
             nn.Linear(256 * 5, 1)
         )
 
@@ -187,7 +187,7 @@ class EncoderModel(nn.Module):
                 padding=1
             ),
             nn.LeakyReLU(0.2),
-            nn.Dropout(0.2),
+            nn.Dropout(0.15),
 
             ResBlock_1d(64, 128, stride=2),
 
@@ -200,7 +200,7 @@ class EncoderModel(nn.Module):
             ),
             nn.GroupNorm(1, 256),
             nn.LeakyReLU(0.2),
-            nn.Dropout(0.3),
+            nn.Dropout(0.15),
 
             nn.Flatten()
         )
