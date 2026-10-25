@@ -1,13 +1,16 @@
 import torch
 from torch import nn
 from dataclasses import dataclass
+import torch.optim as optim
+from torch.utils.data import DataLoader, TensorDataset
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
 
 @dataclass
 class DecoderGeneratorModelConfig:
     batch_size: int = 32
-    sequence_length: int = 100
+    sequence_length: int = 200
     channels: int = 3
     kernel_size_1: int = 5
     stride_1: int = 5
@@ -64,7 +67,7 @@ class DecoderGeneratorModel(nn.Module):
         in_features = self.config.latent_dim + self.config.cond_dim
 
         self.initial_dense = nn.Sequential(
-            nn.Linear(in_features, 256 * 5),
+            nn.Linear(in_features, 256 * 10),
             nn.LeakyReLU(0.2)
         )
 
@@ -92,12 +95,11 @@ class DecoderGeneratorModel(nn.Module):
         )
 
     def forward(self, z, c):
-        
+
         z_cond = torch.cat((z, c), dim=1)
-        
-  
+
         x = self.initial_dense(z_cond)
-        x = x.view(-1, 256, 5)
+        x = x.view(-1, 256, 10)
         
         x = self.attention(x)
         x = self.upsample_1(x)
@@ -189,6 +191,15 @@ class EncoderModel(nn.Module):
             nn.LeakyReLU(0.2),
             nn.Dropout(0.15),
 
+            nn.Conv1d(
+                in_channels=64,
+                out_channels=128,
+                kernel_size=4,
+                stride=2,
+                padding=1
+            ),
+            nn.GroupNorm(1, 128),
+            nn.LeakyReLU(0.2),
             ResBlock_1d(64, 128, stride=2),
 
             nn.Conv1d(
@@ -205,8 +216,8 @@ class EncoderModel(nn.Module):
             nn.Flatten()
         )
 
-        self.fc_mu = nn.Linear(256 * 5, self.latent_dim)
-        self.fc_logvar = nn.Linear(256 * 5, self.latent_dim)
+        self.fc_mu = nn.Linear(256 * 10, self.latent_dim)
+        self.fc_logvar = nn.Linear(256 * 10, self.latent_dim)
 
     def forward(self, x, cond):
 

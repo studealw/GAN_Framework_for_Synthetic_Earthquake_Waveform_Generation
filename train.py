@@ -12,19 +12,17 @@ from model import (
 import pandas as pd
 from torch.utils.data import Dataset
 import numpy as np
-from pathlib import Path
-
 # Device configuration
 device = torch.device(
     "cuda") if torch.cuda.is_available() else torch.device("cpu")
 
 # Hyperparameters
-epochs = 1000
+epochs = 100
 batch_size = 64
 learning_rate = 3e-4
 beta1 = 0.5
 channels = 3
-sequence_length = 100
+sequence_length = 200
 latent_dim = 32
 cond_dim = 7
 n_critic = 5  # Number of critic updates per generator update
@@ -37,47 +35,48 @@ lambda_kl = 0.5       # KL divergence weight
 lambda_spectral = 1.0
 
 
-
 class SpectralLoss(nn.Module):
-    def __init__(self, n_fft=20, hop_length=10):
+    def __init__(self):
         super().__init__()
-        self.n_fft = n_fft
-        self.hop_length = hop_length
         self.l1_loss = nn.L1Loss()
 
     def forward(self, fake_waveforms, real_waveforms):
-        # 1. Reshape from (Batch, Channels, Time) to (Batch * Channels, Time)
-        # torch.stft requires 2D input tensors
-        B, C, T = fake_waveforms.shape
-        fake_flat = fake_waveforms.view(B * C, T)
-        real_flat = real_waveforms.view(B * C, T)
+        # Compute the 1D Real FFT along the time dimension (dim=-1)
+        fft_fake = torch.fft.rfft(fake_waveforms, dim=-1)
+        fft_real = torch.fft.rfft(real_waveforms, dim=-1)
 
-        # 2. Create the window function on the correct device
-        window = torch.hann_window(self.n_fft).to(fake_waveforms.device)
+        # Get the magnitude (amplitude) of the frequencies
+        mag_fake = torch.abs(fft_fake)
+        mag_real = torch.abs(fft_real)
 
-        # 3. Compute STFT (Matches your scipy.signal.spectrogram parameters)
-        stft_fake = torch.stft(fake_flat, n_fft=self.n_fft, hop_length=self.hop_length, 
-                               window=window, return_complex=True)
-        stft_real = torch.stft(real_flat, n_fft=self.n_fft, hop_length=self.hop_length, 
-                               window=window, return_complex=True)
-
-        # 4. Extract magnitude and add epsilon
-        mag_fake = torch.abs(stft_fake) + 1e-8
-        mag_real = torch.abs(stft_real) + 1e-8
-
-        # 5. Calculate L1 loss on the Log Spectrogram
-        loss = self.l1_loss(torch.log(mag_fake), torch.log(mag_real))
+        # Calculate L1 loss on the frequency magnitudes
+        loss = self.l1_loss(mag_fake, mag_real)
         return loss
 
 
 class EarthquakeNumpyDataset(Dataset):
-    def __init__(self, metadata_csv, waveform_npy, sequence_length=100):
+    def __init__(self, metadata_csv, waveform_npy, sequence_length=200):
         self.seq_length = sequence_length
 
         # 1. Read Metadata
         self.df = pd.read_csv(metadata_csv)
 
-        # 2. Extract ONLY the 7 required columns (Matching your TF Notebook)
+        # Automatically compute Epicentral Distance if missing
+        if 'Epicentral_Distance_km' not in self.df.columns:
+            lat1 = np.radians(self.df['Epicenter_Lat'])
+            lon1 = np.radians(self.df['Epicenter_Lon'])
+            lat2 = np.radians(self.df['Station_Lat'])
+            lon2 = np.radians(self.df['Station_Lon'])
+
+            dlat = lat2 - lat1
+            dlon = lon2 - lon1
+
+            a = np.sin(dlat/2.0)**2 + np.cos(lat1) * \
+                np.cos(lat2) * np.sin(dlon/2.0)**2
+            c = 2 * np.arcsin(np.sqrt(a))
+            self.df['Epicentral_Distance_km'] = 6371.0 * c
+
+        # 2. Extract the 7 required columns
         cond_cols = [
             'Magnitude', 'Epicenter_Lat', 'Epicenter_Lon',
             'EQ_Depth(km)', 'Station_Lat', 'Station_Lon', 'Epicentral_Distance_km'
@@ -89,22 +88,16 @@ class EarthquakeNumpyDataset(Dataset):
         self.cond_std = self.conditions.std(axis=0) + 1e-8
         self.conditions = (self.conditions - self.cond_mean) / self.cond_std
 
-        # 3. Load Waveforms from .npy (COMPLETELY IGNORES THE F: DRIVE)
+        # 3. Load Waveforms from .npy
         raw_waveforms = np.load(waveform_npy).astype(np.float32)
-
-        # Truncate to N to match CSV length
         N = len(self.df)
         raw_waveforms = raw_waveforms[:N]
-
-        # Transpose from (Batch, Time, Channels) -> (Batch, Channels, Time) -> (N, 3, 100)
         raw_waveforms = np.transpose(raw_waveforms, (0, 2, 1))
 
-        # Normalize waveforms (Z-score per channel, per waveform)
         means = raw_waveforms.mean(axis=2, keepdims=True)
         stds = raw_waveforms.std(axis=2, keepdims=True) + 1e-8
         self.waveforms = (raw_waveforms - means) / stds
 
-        # 4. Convert to PyTorch Tensors
         self.waveforms = torch.tensor(self.waveforms, dtype=torch.float32)
         self.conditions = torch.tensor(self.conditions, dtype=torch.float32)
 
@@ -112,19 +105,22 @@ class EarthquakeNumpyDataset(Dataset):
         return len(self.df)
 
     def __getitem__(self, idx):
-        # Returns the pre-loaded, pre-normalized tensors instantly
         return self.waveforms[idx], self.conditions[idx]
-
 # Dataloaders
 
 
+# dataset = EarthquakeNumpyDataset(
+#     metadata_csv=r"waveform_folder\train_tab_MAG_data_3_SEC.csv",
+#     # PUT THE EXACT PATH TO YOUR .NPY FILE HERE:
+#     waveform_npy=r"C:\Users\JAY\Downloads\Train_waveform_MAG_data_3C.npy",
+#     sequence_length=sequence_length
+# ).
+# Change this for appropriate path
 dataset = EarthquakeNumpyDataset(
-    metadata_csv=r"waveform_folder\train_tab_MAG_data_3_SEC.csv",
-    # PUT THE EXACT PATH TO YOUR .NPY FILE HERE:
-    waveform_npy=r"C:\Users\JAY\Downloads\Train_waveform_MAG_data_3C.npy",
+    metadata_csv="Train_tab_MAG_data_3_SEC.csv",
+    waveform_npy="Train_waveform_MAG_data_3C.npy",
     sequence_length=sequence_length
 )
-
 # Split the dataset
 train_size = int(0.7 * len(dataset))
 val_size = int(0.15 * len(dataset))
@@ -141,27 +137,12 @@ test_dataloader = DataLoader(
     test_set, batch_size=batch_size, shuffle=False, drop_last=True)
 
 # Calling the Models
-
-encoderPath = Path("encoder_weights.pth")
-decoderPath = Path("decoder_weights.pth")   
-criticPath = Path("critic_weights.pth")
-
-encoder = EncoderModel(latent_dim=latent_dim, cond_dim=cond_dim).to(device)
+encoder = EncoderModel(sequence_length=sequence_length,
+                       latent_dim=latent_dim, cond_dim=cond_dim).to(device)
 decoder = DecoderGeneratorModel(DecoderGeneratorModelConfig(
-                latent_dim=latent_dim, cond_dim=cond_dim)).to(device)
-critic = CriticModel(CriticConfig()).to(device)
-
-if (encoderPath.exists() and decoderPath.exists() and criticPath.exists()) :
-
-    encoder.load_state_dict(torch.load("encoder_weights.pth"))
-    decoder.load_state_dict(torch.load("decoder_weights.pth"))
-    critic.load_state_dict(torch.load("critic_weights.pth"))
-
-    print("Model weights loaded successfully.")
-
-else :
-    print("Model weights not found. Starting training from scratch.")
-    
+    sequence_length=sequence_length, latent_dim=latent_dim, cond_dim=cond_dim)).to(device)
+critic = CriticModel(
+    CriticConfig(), sequence_length=sequence_length).to(device)
 
 # Optimizers
 optimizer_E = optim.AdamW(encoder.parameters(),
@@ -254,6 +235,7 @@ for epoch in range(epochs):
                 torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1).mean()
 
             # Spectral Loss
+            criterion_spectral = SpectralLoss().to(device)
             loss_spectral = criterion_spectral(fake_waveforms, real_waveforms)
             loss_G_total = loss_adv + \
                 (lambda_recon * loss_recon) + (lambda_kl *
