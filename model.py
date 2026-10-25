@@ -23,7 +23,42 @@ class DecoderGeneratorModelConfig:
 class CriticConfig:
     batch_size: int = 32
 
+class ResBlock_1d(nn.Module):
 
+    def __init__(self, in_channels, out_channels, stride=1):
+        super().__init__()
+
+        self.conv1 = nn.Conv1d(in_channels, out_channels, kernel_size=3, stride=stride, padding=1)
+        self.norm1 = nn.GroupNorm(1, out_channels)
+        self.act = nn.LeakyReLU(0.2)
+        
+        self.conv2 = nn.Conv1d(out_channels, out_channels, kernel_size=3, padding=1)
+        self.norm2 = nn.GroupNorm(1, out_channels)
+
+        self.skip = nn.Identity()
+        if stride != 1 or in_channels != out_channels:
+            self.skip = nn.Conv1d(in_channels, out_channels, kernel_size=1, stride=stride)
+
+
+    def forward(self, x):
+        res = self.skip(x)
+        out = self.act(self.norm1(self.conv1(x)))
+        out = self.norm2(self.conv2(out))
+        return self.act(out + res)
+
+class SelfAttention(nn.Module):
+
+    def __init__(self, embd_dim, num_heads):
+        self.mha = nn.MultiheadAttention(embd_dim, num_heads, batch_first=True)
+        self.norm = nn.LayerNorm(embd_dim)
+
+    def forward(self, x):
+
+        x = x.transpose(1, 2)  # (batch_size, channels, seq_length) -> (batch_size, seq_length, channels)
+        attn_output, _ = self.mha(x, x, x)
+        x = self.norm(attn_output + x)  # Residual connection and layer normalization
+
+        return x.transpose(1, 2)  # (batch_size, seq_length, channels) -> (batch_size, channels, seq_length)
 class DecoderGeneratorModel(nn.Module):
     def __init__(self, config: DecoderGeneratorModelConfig):
         super().__init__()
@@ -36,34 +71,20 @@ class DecoderGeneratorModel(nn.Module):
             nn.LeakyReLU(0.2)
         )
 
+        self.attention = SelfAttention(256, 4)
+
         self.upsample_1 = nn.Sequential(
-            nn.Upsample(scale_factor=5, mode="nearest"),
-            nn.Conv1d(
-                in_channels=256,
-                out_channels=128,
-                kernel_size=3,
-                stride=1,
-                padding=1
-            ),
-            nn.GroupNorm(1, 128),
-            nn.LeakyReLU(0.2)
+            nn.Upsample(scale_factor=5, mode = "linear", align_corners=False),
+            ResBlock_1d(in_channels=256, out_channels=128, stride=1),
         )
 
         self.upsample_2 = nn.Sequential(
-            nn.Upsample(scale_factor=2, mode="nearest"),
-            nn.Conv1d(
-                in_channels=128,
-                out_channels=64,
-                kernel_size=3,
-                padding=1
-            ),
-            nn.GroupNorm(1, 64),
-            # nn.Tanh()
-            nn.LeakyReLU(0.2)
+            nn.Upsample(scale_factor=2, mode = "linear", align_corners=False),
+            ResBlock_1d(in_channels=128, out_channels=64, stride=1)
         )
 
         self.upsample_3 = nn.Sequential(
-            nn.Upsample(scale_factor=2, mode="nearest"),
+            nn.Upsample(scale_factor=2, mode = "linear", align_corners=False),
             nn.Conv1d(
                 in_channels=64,
                 out_channels=3,
@@ -78,8 +99,9 @@ class DecoderGeneratorModel(nn.Module):
         z_cond = torch.cat((z, c), dim=1)
 
         x = self.initial_dense(z_cond)
-        x = x.view(-1, 256, 10)  # Reshape to (batch_size, channels, length)
-
+        x = x.view(-1, 256, 10)
+        
+        x = self.attention(x)
         x = self.upsample_1(x)
         x = self.upsample_2(x)
         x = self.upsample_3(x)
@@ -108,18 +130,7 @@ class CriticModel(nn.Module):
             # nn.Dropout(0.3)
         )
 
-        self.conv_block_2 = nn.Sequential(
-            nn.Conv1d(
-                in_channels=64,
-                out_channels=128,
-                kernel_size=4,
-                stride=2,
-                padding=1
-            ),
-            nn.GroupNorm(1, 128),
-            nn.LeakyReLU(0.2),
-            # nn.Dropout(0.3)
-        )
+        self.conv_block_2 = ResBlock_1d(64, 128, stride=2)
 
         self.conv_block_3 = nn.Sequential(
             nn.Conv1d(
@@ -133,6 +144,8 @@ class CriticModel(nn.Module):
             nn.LeakyReLU(0.2),
             # nn.Dropout(0.3)
         )
+
+        self.attention = SelfAttention(embed_dim=256, num_heads=4)
 
         self.classifier = nn.Sequential(
             nn.Flatten(),
@@ -149,6 +162,7 @@ class CriticModel(nn.Module):
         x = self.conv_block_2(x)
         x = self.conv_block_3(x)
 
+        x = self.attention(x)
         x = self.classifier(x)
 
         return x
@@ -184,13 +198,14 @@ class EncoderModel(nn.Module):
             ),
             nn.GroupNorm(1, 128),
             nn.LeakyReLU(0.2),
+            ResBlock_1d(64, 128, stride=2),
 
             nn.Conv1d(
                 in_channels=128,
                 out_channels=256,
-                kernel_size=5,
+                kernel_size=7,
                 stride=5,
-                padding=0
+                padding=1
             ),
             nn.GroupNorm(1, 256),
             nn.LeakyReLU(0.2),
